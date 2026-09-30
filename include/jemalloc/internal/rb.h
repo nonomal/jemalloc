@@ -1,6 +1,9 @@
 #ifndef JEMALLOC_INTERNAL_RB_H
 #define JEMALLOC_INTERNAL_RB_H
 
+#include "jemalloc/internal/jemalloc_preamble.h"
+#include "jemalloc/internal/safety_check.h"
+
 /*-
  *******************************************************************************
  *
@@ -23,7 +26,7 @@
  */
 
 #ifndef __PGI
-#define RB_COMPACT
+#	define RB_COMPACT
 #endif
 
 /*
@@ -35,6 +38,7 @@
  */
 #define RB_MAX_DEPTH (sizeof(void *) << 4)
 
+/* clang-format off */
 #ifdef RB_COMPACT
 /* Node structure. */
 #define rb_node(a_type)							\
@@ -867,6 +871,7 @@ a_prefix##remove(a_rbt_type *rbtree, a_type *node) {			\
 	}								\
     }									\
     rb_remove_safety_checks(nodep, __func__);				\
+    assert(nodep != NULL);                                              \
     assert(nodep->node == node);					\
     pathp--;								\
     if (pathp->node != node) {						\
@@ -1867,5 +1872,6 @@ a_prefix##reverse_iter_filtered(a_rbt_type *rbtree, a_type *start,	\
     return ret;								\
 }									\
 ) /* end rb_summarized_only */
+/* clang-format on */
 
 #endif /* JEMALLOC_INTERNAL_RB_H */

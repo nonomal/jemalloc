@@ -13,7 +13,7 @@
  * at least the damage is compartmentalized to this file.
  */
 
-size_t
+JET_EXTERN size_t
 reg_size_compute(int lg_base, int lg_delta, int ndelta) {
 	return (ZU(1) << lg_base) + (ZU(ndelta) << lg_delta);
 }
@@ -27,7 +27,7 @@ slab_size(int lg_page, int lg_base, int lg_delta, int ndelta) {
 	size_t try_slab_size = page;
 	size_t try_nregs = try_slab_size / reg_size;
 	size_t perfect_slab_size = 0;
-	bool perfect = false;
+	bool   perfect = false;
 	/*
 	 * This loop continues until we find the least common multiple of the
 	 * page size and size class size.  Size classes are all of the form
@@ -106,7 +106,7 @@ size_classes(
 	/* Outputs that we update as we go. */
 	size_t lookup_maxclass = 0;
 	size_t small_maxclass = 0;
-	int lg_large_minclass = 0;
+	int    lg_large_minclass = 0;
 	size_t large_maxclass = 0;
 
 	/* Tiny size classes. */
@@ -209,7 +209,7 @@ size_classes(
 		lg_delta++;
 	}
 	/* Additional outputs. */
-	int nsizes = index;
+	int      nsizes = index;
 	unsigned lg_ceil_nsizes = lg_ceil(nsizes);
 
 	/* Fill in the output data. */
@@ -239,7 +239,7 @@ size_classes(
 	assert(sc_data->lg_tiny_maxclass == SC_LG_TINY_MAXCLASS);
 	assert(sc_data->small_maxclass == SC_SMALL_MAXCLASS);
 	assert(sc_data->large_minclass == SC_LARGE_MINCLASS);
-	assert(sc_data->lg_large_minclass == SC_LG_LARGE_MINCLASS);
+	assert(sc_data->lg_large_minclass == (int)SC_LG_LARGE_MINCLASS);
 	assert(sc_data->large_maxclass == SC_LARGE_MAXCLASS);
 
 	/*
@@ -267,10 +267,13 @@ sc_data_update_sc_slab_size(sc_t *sc, size_t reg_size, size_t pgs_guess) {
 		min_pgs++;
 	}
 	/*
-	 * BITMAP_MAXBITS is actually determined by putting the smallest
-	 * possible size-class on one page, so this can never be 0.
+	 * The slab's bitmap has to cover every region, so the page count is
+	 * capped by what a bitmap can address at the booted page size.  This
+	 * must use BITMAP_BITS rather than BITMAP_MAXBITS: with a dynamic page
+	 * size MAXBITS is sized for MAX_LG_PAGE, which would let slab_sizes
+	 * grow slabs far beyond what the running page size warrants.
 	 */
-	size_t max_pgs = BITMAP_MAXBITS * reg_size / PAGE;
+	size_t max_pgs = BITMAP_BITS * reg_size / PAGE;
 
 	assert(min_pgs <= max_pgs);
 	assert(min_pgs > 0);
@@ -292,8 +295,8 @@ sc_data_update_slab_size(sc_data_t *data, size_t begin, size_t end, int pgs) {
 		if (!sc->bin) {
 			break;
 		}
-		size_t reg_size = reg_size_compute(sc->lg_base, sc->lg_delta,
-		    sc->ndelta);
+		size_t reg_size = reg_size_compute(
+		    sc->lg_base, sc->lg_delta, sc->ndelta);
 		if (begin <= reg_size && reg_size <= end) {
 			sc_data_update_sc_slab_size(sc, reg_size, pgs);
 		}

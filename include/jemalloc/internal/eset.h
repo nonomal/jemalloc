@@ -1,9 +1,10 @@
 #ifndef JEMALLOC_INTERNAL_ESET_H
 #define JEMALLOC_INTERNAL_ESET_H
 
+#include "jemalloc/internal/jemalloc_preamble.h"
 #include "jemalloc/internal/atomic.h"
-#include "jemalloc/internal/fb.h"
 #include "jemalloc/internal/edata.h"
+#include "jemalloc/internal/fb.h"
 #include "jemalloc/internal/mutex.h"
 
 /*
@@ -37,12 +38,12 @@ struct eset_bin_stats_s {
 typedef struct eset_s eset_t;
 struct eset_s {
 	/* Bitmap for which set bits correspond to non-empty heaps. */
-	fb_group_t bitmap[FB_NGROUPS(SC_NPSIZES + 1)];
+	fb_group_t bitmap[FB_NGROUPS(SC_NPSIZES_MAX + 1)];
 
 	/* Quantized per size class heaps of extents. */
-	eset_bin_t bins[SC_NPSIZES + 1];
+	eset_bin_t bins[SC_NPSIZES_MAX + 1];
 
-	eset_bin_stats_t bin_stats[SC_NPSIZES + 1];
+	eset_bin_stats_t bin_stats[SC_NPSIZES_MAX + 1];
 
 	/* LRU of all extents in heaps. */
 	edata_list_inactive_t lru;
@@ -59,11 +60,11 @@ struct eset_s {
 
 void eset_init(eset_t *eset, extent_state_t state);
 
-size_t eset_npages_get(eset_t *eset);
+size_t eset_npages_get(const eset_t *eset);
 /* Get the number of extents in the given page size index. */
-size_t eset_nextents_get(eset_t *eset, pszind_t ind);
+size_t eset_nextents_get(const eset_t *eset, pszind_t ind);
 /* Get the sum total bytes of the extents in the given page size index. */
-size_t eset_nbytes_get(eset_t *eset, pszind_t ind);
+size_t eset_nbytes_get(const eset_t *eset, pszind_t ind);
 
 void eset_insert(eset_t *eset, edata_t *edata);
 void eset_remove(eset_t *eset, edata_t *edata);
@@ -72,6 +73,6 @@ void eset_remove(eset_t *eset, edata_t *edata);
  * null if no such item could be found.
  */
 edata_t *eset_fit(eset_t *eset, size_t esize, size_t alignment, bool exact_only,
-    unsigned lg_max_fit);
+    unsigned lg_max_fit, bool prefer_small);
 
 #endif /* JEMALLOC_INTERNAL_ESET_H */

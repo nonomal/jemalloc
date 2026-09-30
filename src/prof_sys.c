@@ -1,15 +1,20 @@
-#define JEMALLOC_PROF_SYS_C_
 #include "jemalloc/internal/jemalloc_preamble.h"
-#include "jemalloc/internal/jemalloc_internal_includes.h"
 
+#include "jemalloc/internal/arena.h"
 #include "jemalloc/internal/buf_writer.h"
 #include "jemalloc/internal/ctl.h"
+#include "jemalloc/internal/jemalloc_internal_inlines_a.h"
+#include "jemalloc/internal/malloc_io.h"
+#include "jemalloc/internal/mutex.h"
+#include "jemalloc/internal/os.h"
+#include "jemalloc/internal/prof.h"
 #include "jemalloc/internal/prof_data.h"
+#include "jemalloc/internal/prof_inlines.h"
 #include "jemalloc/internal/prof_sys.h"
 
 #ifdef JEMALLOC_PROF_LIBUNWIND
-#define UNW_LOCAL_ONLY
-#include <libunwind.h>
+#	define UNW_LOCAL_ONLY
+#	include <libunwind.h>
 #endif
 
 #ifdef JEMALLOC_PROF_LIBGCC
@@ -18,16 +23,15 @@
  * use libgcc's unwinding functionality, but after we've included that, we've
  * already hooked _Unwind_Backtrace.  We'll temporarily disable hooking.
  */
-#undef _Unwind_Backtrace
-#include <unwind.h>
-#define _Unwind_Backtrace JEMALLOC_TEST_HOOK(_Unwind_Backtrace, test_hooks_libc_hook)
+#	undef _Unwind_Backtrace
+#	include <unwind.h>
+#	define _Unwind_Backtrace                                              \
+		JEMALLOC_TEST_HOOK(_Unwind_Backtrace, test_hooks_libc_hook)
 #endif
 
 /******************************************************************************/
 
 malloc_mutex_t prof_dump_filename_mtx;
-
-bool prof_do_mock = false;
 
 static uint64_t prof_dump_seq;
 static uint64_t prof_dump_iseq;
@@ -74,7 +78,7 @@ prof_unwind_init_callback(struct _Unwind_Context *context, void *arg) {
 static _Unwind_Reason_Code
 prof_unwind_callback(struct _Unwind_Context *context, void *arg) {
 	prof_unwind_data_t *data = (prof_unwind_data_t *)arg;
-	void *ip;
+	void               *ip;
 
 	cassert(config_prof);
 
@@ -102,24 +106,26 @@ prof_backtrace_impl(void **vec, unsigned *len, unsigned max_len) {
 	_Unwind_Backtrace(prof_unwind_callback, &data);
 }
 #elif (defined(JEMALLOC_PROF_GCC))
+JEMALLOC_DIAGNOSTIC_PUSH
+JEMALLOC_DIAGNOSTIC_IGNORE_FRAME_ADDRESS
 static void
 prof_backtrace_impl(void **vec, unsigned *len, unsigned max_len) {
 /* The input arg must be a constant for __builtin_return_address. */
-#define BT_FRAME(i)							\
-	if ((i) < max_len) {						\
-		void *p;						\
-		if (__builtin_frame_address(i) == 0) {			\
-			return;						\
-		}							\
-		p = __builtin_return_address(i);			\
-		if (p == NULL) {					\
-			return;						\
-		}							\
-		vec[(i)] = p;						\
-		*len = (i) + 1;						\
-	} else {							\
-		return;							\
-	}
+#	define BT_FRAME(i)                                                    \
+		if ((i) < max_len) {                                           \
+			void *p;                                               \
+			if (__builtin_frame_address(i) == 0) {                 \
+				return;                                        \
+			}                                                      \
+			p = __builtin_return_address(i);                       \
+			if (p == NULL) {                                       \
+				return;                                        \
+			}                                                      \
+			vec[(i)] = p;                                          \
+			*len = (i) + 1;                                        \
+		} else {                                                       \
+			return;                                                \
+		}
 
 	cassert(config_prof);
 	assert(vec != NULL);
@@ -406,7 +412,8 @@ prof_backtrace_impl(void **vec, unsigned *len, unsigned max_len) {
 	BT_FRAME(253)
 	BT_FRAME(254)
 	BT_FRAME(255)
-#undef BT_FRAME
+#	undef BT_FRAME
+	JEMALLOC_DIAGNOSTIC_POP
 }
 #else
 static void
@@ -428,7 +435,7 @@ prof_backtrace(tsd_t *tsd, prof_bt_t *bt) {
 }
 
 void
-prof_hooks_init() {
+prof_hooks_init(void) {
 	prof_backtrace_hook_set(&prof_backtrace_impl);
 	prof_dump_hook_set(NULL);
 	prof_sample_hook_set(NULL);
@@ -436,7 +443,7 @@ prof_hooks_init() {
 }
 
 void
-prof_unwind_init() {
+prof_unwind_init(void) {
 #ifdef JEMALLOC_PROF_LIBGCC
 	/*
 	 * Cause the backtracing machinery to allocate its internal
@@ -467,8 +474,9 @@ prof_sys_thread_name_fetch(tsd_t *tsd) {
 		return;
 	}
 
-	if (prof_sys_thread_name_read(tdata->thread_name,
-	    PROF_THREAD_NAME_MAX_LEN) != 0) {
+	if (prof_sys_thread_name_read(
+	        tdata->thread_name, PROF_THREAD_NAME_MAX_LEN)
+	    != 0) {
 		prof_thread_name_clear(tdata);
 	}
 
@@ -477,11 +485,7 @@ prof_sys_thread_name_fetch(tsd_t *tsd) {
 
 int
 prof_getpid(void) {
-#ifdef _WIN32
-	return GetCurrentProcessId();
-#else
-	return getpid();
-#endif
+	return os_process_id();
 }
 
 /*
@@ -511,8 +515,8 @@ struct prof_dump_arg_s {
 };
 
 static void
-prof_dump_check_possible_error(prof_dump_arg_t *arg, bool err_cond,
-    const char *format, ...) {
+prof_dump_check_possible_error(
+    prof_dump_arg_t *arg, bool err_cond, const char *format, ...) {
 	assert(!arg->error);
 	if (!err_cond) {
 		return;
@@ -524,7 +528,7 @@ prof_dump_check_possible_error(prof_dump_arg_t *arg, bool err_cond,
 	}
 
 	va_list ap;
-	char buf[PROF_PRINTF_BUFSIZE];
+	char    buf[PROF_PRINTF_BUFSIZE];
 	va_start(ap, format);
 	malloc_vsnprintf(buf, sizeof(buf), format, ap);
 	va_end(ap);
@@ -556,8 +560,8 @@ prof_dump_flush(void *opaque, const char *s) {
 	cassert(config_prof);
 	prof_dump_arg_t *arg = (prof_dump_arg_t *)opaque;
 	if (!arg->error) {
-		ssize_t err = prof_dump_write_file(arg->prof_dump_fd, s,
-		    strlen(s));
+		ssize_t err = prof_dump_write_file(
+		    arg->prof_dump_fd, s, strlen(s));
 		prof_dump_check_possible_error(arg, err == -1,
 		    "<jemalloc>: failed to write during heap profile flush\n");
 	}
@@ -570,79 +574,29 @@ prof_dump_close(prof_dump_arg_t *arg) {
 	}
 }
 
-#ifndef _WIN32
-JEMALLOC_FORMAT_PRINTF(1, 2)
-static int
-prof_open_maps_internal(const char *format, ...) {
-	int mfd;
-	va_list ap;
-	char filename[PATH_MAX + 1];
-
-	va_start(ap, format);
-	malloc_vsnprintf(filename, sizeof(filename), format, ap);
-	va_end(ap);
-
-#if defined(O_CLOEXEC)
-	mfd = open(filename, O_RDONLY | O_CLOEXEC);
+#ifdef JEMALLOC_OS_PROF_NO_OPEN_MAPS
+/*
+ * No fd-based maps file to read on this platform (os_prof_dump_maps() below
+ * doesn't consult this hook at all); left NULL so tests that mock it know to
+ * skip themselves.
+ */
+prof_dump_open_maps_t *JET_MUTABLE prof_dump_open_maps = NULL;
 #else
-	mfd = open(filename, O_RDONLY);
-	if (mfd != -1) {
-		fcntl(mfd, F_SETFD, fcntl(mfd, F_GETFD) | FD_CLOEXEC);
-	}
+prof_dump_open_maps_t *JET_MUTABLE prof_dump_open_maps = os_prof_open_maps;
 #endif
-
-	return mfd;
-}
-#endif
-
-static int
-prof_dump_open_maps_impl() {
-	int mfd;
-
-	cassert(config_prof);
-#if defined(__FreeBSD__) || defined(__DragonFly__)
-	mfd = prof_open_maps_internal("/proc/curproc/map");
-#elif defined(_WIN32)
-	mfd = -1; // Not implemented
-#else
-	int pid = prof_getpid();
-
-	mfd = prof_open_maps_internal("/proc/%d/task/%d/maps", pid, pid);
-	if (mfd == -1) {
-		mfd = prof_open_maps_internal("/proc/%d/maps", pid);
-	}
-#endif
-	return mfd;
-}
-prof_dump_open_maps_t *JET_MUTABLE prof_dump_open_maps =
-    prof_dump_open_maps_impl;
-
-static ssize_t
-prof_dump_read_maps_cb(void *read_cbopaque, void *buf, size_t limit) {
-	int mfd = *(int *)read_cbopaque;
-	assert(mfd != -1);
-	return malloc_read_fd(mfd, buf, limit);
-}
 
 static void
 prof_dump_maps(buf_writer_t *buf_writer) {
-	int mfd = prof_dump_open_maps();
-	if (mfd == -1) {
-		return;
-	}
-
-	buf_writer_cb(buf_writer, "\nMAPPED_LIBRARIES:\n");
-	buf_writer_pipe(buf_writer, prof_dump_read_maps_cb, &mfd);
-	close(mfd);
+	os_prof_dump_maps(buf_writer, prof_dump_open_maps);
 }
 
 static bool
-prof_dump(tsd_t *tsd, bool propagate_err, const char *filename,
-    bool leakcheck) {
+prof_dump(
+    tsd_t *tsd, bool propagate_err, const char *filename, bool leakcheck) {
 	cassert(config_prof);
 	assert(tsd_reentrancy_level_get(tsd) == 0);
 
-	prof_tdata_t * tdata = prof_tdata_get(tsd, true);
+	prof_tdata_t *tdata = prof_tdata_get(tsd, true);
 	if (tdata == NULL) {
 		return true;
 	}
@@ -689,7 +643,7 @@ prof_strncpy(char *UNUSED dest, const char *UNUSED src, size_t UNUSED size) {
 }
 
 static const char *
-prof_prefix_get(tsdn_t* tsdn) {
+prof_prefix_get(tsdn_t *tsdn) {
 	malloc_mutex_assert_owner(tsdn, &prof_dump_filename_mtx);
 
 	return prof_prefix == NULL ? opt_prof_prefix : prof_prefix;
@@ -713,15 +667,31 @@ prof_dump_filename(tsd_t *tsd, char *filename, char v, uint64_t vseq) {
 	const char *prefix = prof_prefix_get(tsd_tsdn(tsd));
 
 	if (vseq != VSEQ_INVALID) {
-	        /* "<prefix>.<pid>.<seq>.v<vseq>.heap" */
-		malloc_snprintf(filename, DUMP_FILENAME_BUFSIZE,
-		    "%s.%d.%"FMTu64".%c%"FMTu64".heap", prefix, prof_getpid(),
-		    prof_dump_seq, v, vseq);
+		if (opt_prof_pid_namespace) {
+			/* "<prefix>.<pid_namespace>.<pid>.<seq>.v<vseq>.heap" */
+			malloc_snprintf(filename, DUMP_FILENAME_BUFSIZE,
+			    "%s.%" FMTu64 ".%d.%" FMTu64 ".%c%" FMTu64 ".heap",
+			    prefix, os_prof_pid_namespace(), prof_getpid(),
+			    prof_dump_seq, v, vseq);
+		} else {
+			/* "<prefix>.<pid>.<seq>.v<vseq>.heap" */
+			malloc_snprintf(filename, DUMP_FILENAME_BUFSIZE,
+			    "%s.%d.%" FMTu64 ".%c%" FMTu64 ".heap", prefix,
+			    prof_getpid(), prof_dump_seq, v, vseq);
+		}
 	} else {
-	        /* "<prefix>.<pid>.<seq>.<v>.heap" */
-		malloc_snprintf(filename, DUMP_FILENAME_BUFSIZE,
-		    "%s.%d.%"FMTu64".%c.heap", prefix, prof_getpid(),
-		    prof_dump_seq, v);
+		if (opt_prof_pid_namespace) {
+			/* "<prefix>.<pid_namespace>.<pid>.<seq>.<v>.heap" */
+			malloc_snprintf(filename, DUMP_FILENAME_BUFSIZE,
+			    "%s.%" FMTu64 ".%d.%" FMTu64 ".%c.heap", prefix,
+			    os_prof_pid_namespace(), prof_getpid(),
+			    prof_dump_seq, v);
+		} else {
+			/* "<prefix>.<pid>.<seq>.<v>.heap" */
+			malloc_snprintf(filename, DUMP_FILENAME_BUFSIZE,
+			    "%s.%d.%" FMTu64 ".%c.heap", prefix, prof_getpid(),
+			    prof_dump_seq, v);
+		}
 	}
 	prof_dump_seq++;
 }
@@ -729,8 +699,16 @@ prof_dump_filename(tsd_t *tsd, char *filename, char v, uint64_t vseq) {
 void
 prof_get_default_filename(tsdn_t *tsdn, char *filename, uint64_t ind) {
 	malloc_mutex_lock(tsdn, &prof_dump_filename_mtx);
-	malloc_snprintf(filename, PROF_DUMP_FILENAME_LEN,
-	    "%s.%d.%"FMTu64".json", prof_prefix_get(tsdn), prof_getpid(), ind);
+	if (opt_prof_pid_namespace) {
+		malloc_snprintf(filename, PROF_DUMP_FILENAME_LEN,
+		    "%s.%" FMTu64 ".%d.%" FMTu64 ".json",
+		    prof_prefix_get(tsdn), os_prof_pid_namespace(),
+		    prof_getpid(), ind);
+	} else {
+		malloc_snprintf(filename, PROF_DUMP_FILENAME_LEN,
+		    "%s.%d.%" FMTu64 ".json", prof_prefix_get(tsdn),
+		    prof_getpid(), ind);
+	}
 	malloc_mutex_unlock(tsdn, &prof_dump_filename_mtx);
 }
 
@@ -756,8 +734,8 @@ prof_prefix_set(tsdn_t *tsdn, const char *prefix) {
 	if (prof_prefix == NULL) {
 		malloc_mutex_unlock(tsdn, &prof_dump_filename_mtx);
 		/* Everything is still guarded by ctl_mtx. */
-		char *buffer = base_alloc(tsdn, prof_base,
-		    PROF_DUMP_FILENAME_LEN, QUANTUM);
+		char *buffer = base_alloc(
+		    tsdn, prof_base, PROF_DUMP_FILENAME_LEN, QUANTUM);
 		if (buffer == NULL) {
 			return true;
 		}
@@ -794,7 +772,8 @@ prof_mdump_impl(tsd_t *tsd, const char *filename) {
 		/* No filename specified, so automatically generate one. */
 		malloc_mutex_lock(tsd_tsdn(tsd), &prof_dump_filename_mtx);
 		if (prof_prefix_get(tsd_tsdn(tsd))[0] == '\0') {
-			malloc_mutex_unlock(tsd_tsdn(tsd), &prof_dump_filename_mtx);
+			malloc_mutex_unlock(
+			    tsd_tsdn(tsd), &prof_dump_filename_mtx);
 			return true;
 		}
 		prof_dump_filename(tsd, filename_buf, 'm', prof_dump_mseq);

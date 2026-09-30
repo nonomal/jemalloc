@@ -1,69 +1,16 @@
 #ifndef JEMALLOC_INTERNAL_INLINES_A_H
 #define JEMALLOC_INTERNAL_INLINES_A_H
 
+#include "jemalloc/internal/jemalloc_preamble.h"
+#include "jemalloc/internal/arena.h"
+#include "jemalloc/internal/arenas_management.h"
 #include "jemalloc/internal/atomic.h"
 #include "jemalloc/internal/bit_util.h"
 #include "jemalloc/internal/jemalloc_internal_types.h"
+#include "jemalloc/internal/os.h"
 #include "jemalloc/internal/sc.h"
+#include "jemalloc/internal/tcache.h"
 #include "jemalloc/internal/ticker.h"
-
-JEMALLOC_ALWAYS_INLINE malloc_cpuid_t
-malloc_getcpu(void) {
-	assert(have_percpu_arena);
-#if defined(_WIN32)
-	return GetCurrentProcessorNumber();
-#elif defined(JEMALLOC_HAVE_SCHED_GETCPU)
-	return (malloc_cpuid_t)sched_getcpu();
-#elif defined(JEMALLOC_HAVE_RDTSCP)
-	unsigned int ax, cx, dx;
-	asm volatile("rdtscp" : "=a"(ax), "=d"(dx), "=c"(cx) ::);
-	return (malloc_cpuid_t)(dx & 0xfff);
-#elif defined(__aarch64__) && defined(__APPLE__)
-	/* Other oses most likely use tpidr_el0 instead */
-	uintptr_t c;
-	asm volatile("mrs %x0, tpidrro_el0" : "=r"(c) :: "memory");
-	return (malloc_cpuid_t)(c & (1 << 3) - 1);
-#else
-	not_reached();
-	return -1;
-#endif
-}
-
-/* Return the chosen arena index based on current cpu. */
-JEMALLOC_ALWAYS_INLINE unsigned
-percpu_arena_choose(void) {
-	assert(have_percpu_arena && PERCPU_ARENA_ENABLED(opt_percpu_arena));
-
-	malloc_cpuid_t cpuid = malloc_getcpu();
-	assert(cpuid >= 0);
-
-	unsigned arena_ind;
-	if ((opt_percpu_arena == percpu_arena) || ((unsigned)cpuid < ncpus /
-	    2)) {
-		arena_ind = cpuid;
-	} else {
-		assert(opt_percpu_arena == per_phycpu_arena);
-		/* Hyper threads on the same physical CPU share arena. */
-		arena_ind = cpuid - ncpus / 2;
-	}
-
-	return arena_ind;
-}
-
-/* Return the limit of percpu auto arena range, i.e. arenas[0...ind_limit). */
-JEMALLOC_ALWAYS_INLINE unsigned
-percpu_arena_ind_limit(percpu_arena_mode_t mode) {
-	assert(have_percpu_arena && PERCPU_ARENA_ENABLED(mode));
-	if (mode == per_phycpu_arena && ncpus > 1) {
-		if (ncpus % 2) {
-			/* This likely means a misconfig. */
-			return ncpus / 2 + 1;
-		}
-		return ncpus / 2;
-	} else {
-		return ncpus;
-	}
-}
 
 static inline arena_t *
 arena_get(tsdn_t *tsdn, unsigned ind, bool init_if_missing) {

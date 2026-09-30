@@ -1,7 +1,9 @@
 #ifndef JEMALLOC_INTERNAL_SC_H
 #define JEMALLOC_INTERNAL_SC_H
 
+#include "jemalloc/internal/jemalloc_preamble.h"
 #include "jemalloc/internal/jemalloc_internal_types.h"
+#include "jemalloc/internal/pages.h"
 
 /*
  * Size class computations:
@@ -173,7 +175,7 @@
 
 #if SC_LG_TINY_MIN == 0
 /* The div module doesn't support division by 1, which this would require. */
-#error "Unsupported LG_TINY_MIN"
+#	error "Unsupported LG_TINY_MIN"
 #endif
 
 /*
@@ -193,8 +195,8 @@
  * We could probably save some space in arenas by capping this at LG_VADDR size.
  */
 #define SC_LG_BASE_MAX (SC_PTR_BITS - 2)
-#define SC_NREGULAR (SC_NGROUP * 					\
-    (SC_LG_BASE_MAX - SC_LG_FIRST_REGULAR_BASE + 1) - 1)
+#define SC_NREGULAR                                                            \
+	(SC_NGROUP * (SC_LG_BASE_MAX - SC_LG_FIRST_REGULAR_BASE + 1) - 1)
 #define SC_NSIZES (SC_NTINY + SC_NPSEUDO + SC_NREGULAR)
 
 /*
@@ -221,29 +223,36 @@
  *
  * This gives us the quantity we seek.
  */
-#define SC_NPSIZES (							\
-    SC_NGROUP								\
-    + (SC_LG_BASE_MAX - (LG_PAGE + SC_LG_NGROUP)) * SC_NGROUP		\
-    + SC_NGROUP - 1)
+#define SC_NPSIZES_FOR(_lg_page)                                               \
+	(SC_NGROUP                                                             \
+	    + (SC_LG_BASE_MAX - ((_lg_page) + SC_LG_NGROUP)) * SC_NGROUP       \
+	    + SC_NGROUP - 1)
+#define SC_NPSIZES SC_NPSIZES_FOR(LG_PAGE)
+#define SC_NPSIZES_MAX SC_NPSIZES_FOR(LG_PAGE_OR_MIN)
 
 /*
  * We declare a size class is binnable if size < page size * group. Or, in other
  * words, lg(size) < lg(page size) + lg(group size).
  */
-#define SC_NBINS (							\
-    /* Sub-regular size classes. */					\
-    SC_NTINY + SC_NPSEUDO						\
-    /* Groups with lg_regular_min_base <= lg_base <= lg_base_max */	\
-    + SC_NGROUP * (LG_PAGE + SC_LG_NGROUP - SC_LG_FIRST_REGULAR_BASE)	\
-    /* Last SC of the last group hits the bound exactly; exclude it. */	\
-    - 1)
+#define SC_NBINS_FOR(_lg_page)                                                                                      \
+	(/* Sub-regular size classes. */                                                                            \
+	    SC_NTINY                                                                                                \
+	    + SC_NPSEUDO /* Groups with lg_regular_min_base <= lg_base <= lg_base_max */                            \
+	    + SC_NGROUP                                                                                             \
+	        * ((_lg_page) + SC_LG_NGROUP                                                                        \
+	            - SC_LG_FIRST_REGULAR_BASE) /* Last SC of the last group hits the bound exactly; exclude it. */ \
+	    - 1)
+
+#define SC_NBINS SC_NBINS_FOR(LG_PAGE)
+#define SC_NBINS_MIN SC_NBINS_FOR(LG_PAGE_OR_MIN)
+#define SC_NBINS_MAX SC_NBINS_FOR(LG_PAGE_OR_MAX)
 
 /*
  * The size2index_tab lookup table uses uint8_t to encode each bin index, so we
  * cannot support more than 256 small size classes.
  */
-#if (SC_NBINS > 256)
-#  error "Too many small size classes"
+#if (SC_NBINS_MAX > 256)
+#	error "Too many small size classes"
 #endif
 
 /* The largest size class in the lookup table, and its binary log. */
@@ -251,41 +260,80 @@
 #define SC_LOOKUP_MAXCLASS (1 << SC_LG_MAX_LOOKUP)
 
 /* Internal, only used for the definition of SC_SMALL_MAXCLASS. */
-#define SC_SMALL_MAX_BASE (1 << (LG_PAGE + SC_LG_NGROUP - 1))
-#define SC_SMALL_MAX_DELTA (1 << (LG_PAGE - 1))
+#define SC_SMALL_MAX_BASE_FOR(_lg_page) (1 << ((_lg_page) + SC_LG_NGROUP - 1))
+#define SC_SMALL_MAX_DELTA_FOR(_lg_page) (1 << ((_lg_page) - 1))
+#define SC_SMALL_MAXCLASS_FOR(_lg_page)                                        \
+	(SC_SMALL_MAX_BASE_FOR(_lg_page)                                       \
+	    + (SC_NGROUP - 1) * SC_SMALL_MAX_DELTA_FOR(_lg_page))
 
-/* The largest size class allocated out of a slab. */
-#define SC_SMALL_MAXCLASS (SC_SMALL_MAX_BASE				\
-    + (SC_NGROUP - 1) * SC_SMALL_MAX_DELTA)
+#define SC_SMALL_MAXCLASS SC_SMALL_MAXCLASS_FOR(LG_PAGE)
+#define SC_SMALL_MAXCLASS_MIN SC_SMALL_MAXCLASS_FOR(LG_PAGE_OR_MIN)
 
 /* The fastpath assumes all lookup-able sizes are small. */
-#if (SC_SMALL_MAXCLASS < SC_LOOKUP_MAXCLASS)
-#  error "Lookup table sizes must be small"
+#if (SC_SMALL_MAXCLASS_MIN < SC_LOOKUP_MAXCLASS)
+#	error "Lookup table sizes must be small"
 #endif
 
 /* The smallest size class not allocated out of a slab. */
 #define SC_LARGE_MINCLASS ((size_t)1ULL << (LG_PAGE + SC_LG_NGROUP))
-#define SC_LG_LARGE_MINCLASS (LG_PAGE + SC_LG_NGROUP)
+#define SC_LG_LARGE_MINCLASS_FOR(_lg_page) ((_lg_page) + SC_LG_NGROUP)
+#define SC_LG_LARGE_MINCLASS SC_LG_LARGE_MINCLASS_FOR(LG_PAGE)
+#define SC_LG_LARGE_MINCLASS_MIN SC_LG_LARGE_MINCLASS_FOR(LG_PAGE_OR_MIN)
+#define SC_LG_LARGE_MINCLASS_MAX SC_LG_LARGE_MINCLASS_FOR(LG_PAGE_OR_MAX)
 
-/* Internal; only used for the definition of SC_LARGE_MAXCLASS. */
-#define SC_MAX_BASE ((size_t)1 << (SC_PTR_BITS - 2))
-#define SC_MAX_DELTA ((size_t)1 << (SC_PTR_BITS - 2 - SC_LG_NGROUP))
-
-/* The largest size class supported. */
-#define SC_LARGE_MAXCLASS (SC_MAX_BASE + (SC_NGROUP - 1) * SC_MAX_DELTA)
-
-/* Maximum number of regions in one slab. */
-#ifndef CONFIG_LG_SLAB_MAXREGS
-#  define SC_LG_SLAB_MAXREGS (LG_PAGE - SC_LG_TINY_MIN)
+/*
+ * The largest size class supported.  Spell this out directly to avoid
+ * expanding subtractive arithmetic at every use site.
+ */
+#if LG_SIZEOF_PTR == 3
+#	define SC_LARGE_MAXCLASS 0x7000000000000000ULL
+#elif LG_SIZEOF_PTR == 2
+#	define SC_LARGE_MAXCLASS 0x70000000ULL
 #else
-#  if CONFIG_LG_SLAB_MAXREGS < (LG_PAGE - SC_LG_TINY_MIN)
-#    error "Unsupported SC_LG_SLAB_MAXREGS"
-#  else
-#    define SC_LG_SLAB_MAXREGS CONFIG_LG_SLAB_MAXREGS
-#  endif
+#	error "Unsupported pointer size"
 #endif
 
-#define SC_SLAB_MAXREGS (1U << SC_LG_SLAB_MAXREGS)
+/* Maximum number of regions in one slab. */
+#define SC_LG_SLAB_MAXREGS_FOR(_lg_page) ((_lg_page) - SC_LG_TINY_MIN)
+#ifndef CONFIG_LG_SLAB_MAXREGS
+#	define SC_LG_SLAB_MAXREGS SC_LG_SLAB_MAXREGS_FOR(LG_PAGE)
+#	ifdef DYNAMIC_PAGE_SIZE
+#		define SC_LG_SLAB_MAXREGS_MAX                                 \
+			SC_LG_SLAB_MAXREGS_FOR(MAX_LG_PAGE)
+#	else /* DYNAMIC_PAGE_SIZE */
+#		define SC_LG_SLAB_MAXREGS_MAX SC_LG_SLAB_MAXREGS
+#	endif /* DYNAMIC_PAGE_SIZE */
+#else
+#	if CONFIG_LG_SLAB_MAXREGS < SC_LG_SLAB_MAXREGS_FOR(LG_PAGE_OR_MAX)
+#		error "Unsupported SC_LG_SLAB_MAXREGS"
+#	else
+#		define SC_LG_SLAB_MAXREGS CONFIG_LG_SLAB_MAXREGS
+#		define SC_LG_SLAB_MAXREGS_MAX CONFIG_LG_SLAB_MAXREGS
+#	endif
+#endif
+
+/*
+ * When large size classes are disabled, there is no concept of size classes
+ * for sizes > SC_SMALLMAXCLASS (or >= SC_LARGE_MINCLASS).  This ensures that
+ * the overhead between the usable size and the user request size will not
+ * exceed PAGE.  Between SC_LARGE_MINCLASS (SC_NGROUP * PAGE) and
+ * 2 * SC_NGROUP * PAGE, the size classes also happen to be aligned with PAGE.
+ * Since tcache relies on size classes to work and it greatly increases the
+ * perf of allocs & deallocs, we extend the existence of size class to
+ * 2 * SC_NGROUP * PAGE ONLY for the tcache module.  This means for all other
+ * modules, there is no size class for sizes >= SC_LARGE_MINCLASS.  Yet for
+ * tcache, the threshold is moved up to 2 * SC_NGROUP * PAGE, which is
+ * USIZE_GROW_SLOW_THRESHOLD defined below.  With the default SC_NGROUP being
+ * 2, and PAGE being 4KB, the threshold for tcache (USIZE_GROW_SLOW_THRESHOLD)
+ * is 32KB.
+ */
+#define LG_USIZE_GROW_SLOW_THRESHOLD_FOR(_lg_page)                             \
+	(SC_LG_NGROUP + (_lg_page) + 1)
+#define LG_USIZE_GROW_SLOW_THRESHOLD                                           \
+	LG_USIZE_GROW_SLOW_THRESHOLD_FOR(LG_PAGE)
+#define LG_USIZE_GROW_SLOW_THRESHOLD_MAX                                       \
+	LG_USIZE_GROW_SLOW_THRESHOLD_FOR(LG_PAGE_OR_MAX)
+#define USIZE_GROW_SLOW_THRESHOLD (1U << LG_USIZE_GROW_SLOW_THRESHOLD)
 
 typedef struct sc_s sc_t;
 struct sc_s {
@@ -344,14 +392,13 @@ struct sc_data_s {
 	sc_t sc[SC_NSIZES];
 };
 
-size_t reg_size_compute(int lg_base, int lg_delta, int ndelta);
-void sc_data_init(sc_data_t *data);
+void   sc_data_init(sc_data_t *data);
 /*
  * Updates slab sizes in [begin, end] to be pgs pages in length, if possible.
  * Otherwise, does its best to accommodate the request.
  */
-void sc_data_update_slab_size(sc_data_t *data, size_t begin, size_t end,
-    int pgs);
+void sc_data_update_slab_size(
+    sc_data_t *data, size_t begin, size_t end, int pgs);
 void sc_boot(sc_data_t *data);
 
 #endif /* JEMALLOC_INTERNAL_SC_H */
